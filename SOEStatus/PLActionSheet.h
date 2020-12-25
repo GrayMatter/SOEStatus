@@ -8,8 +8,8 @@
 
 #import <UIKit/UIKit.h>
 
-typedef void (^DismissBlock)(int buttonIndex);
-typedef void (^CancelBlock)();
+typedef void (^DismissBlock)(NSInteger buttonIndex);
+typedef void (^VoidBlock)(void);
 
 @interface PLActionSheet : UIActionSheet <UIActionSheetDelegate>
 
@@ -20,14 +20,16 @@ typedef void (^CancelBlock)();
 //                    onDismiss:(void(^)(int index))dismissed                   
 //                     onCancel:(void(^)())cancelled;
                    onDismiss:(DismissBlock)dismissed                   
-                    onCancel:(CancelBlock)cancelled;
+                    onCancel:(VoidBlock)cancelled
+                     finally:(VoidBlock)finally;
 
 - (id)initWithTitle:(NSString *)title                     
 destructiveButtonTitle:(NSString *)destructiveButtonTitle
             buttons:(NSArray *)buttonTitles
            showFrom:(id)view
           onDismiss:(DismissBlock)dismissed                   
-           onCancel:(CancelBlock)cancelled;
+           onCancel:(VoidBlock)cancelled
+            finally:(VoidBlock)finally;
 
 - (void)show;
 

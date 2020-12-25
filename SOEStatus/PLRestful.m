@@ -7,23 +7,14 @@
 //
 
 #import "PLRestful.h"
-#import "ASIHTTPRequest.h"
-#import "JSON.h"
 #import "PRPAlertView.h"
 #import "Reachability.h"
 #import "UIApplication+PRPNetworkActivity.h"
+#import "PLCategories.h"
 
-@interface NSString (Encoding)
-@end
-@implementation NSString (Encoding)
+@interface PLRestful ()
 
-- (NSString *)pl_stringByAddingPercentEscapesUsingEncoding:(CFStringBuiltInEncodings)encoding {
-    return [(NSString *)CFURLCreateStringByAddingPercentEscapes(NULL,
-                                                               (CFStringRef)self,
-                                                               NULL,
-                                                               (CFStringRef)@"!*'\"();:@&=+$,/?%#[]% ",
-                                                               encoding) autorelease];
-}
+@property (nonatomic, strong) NSOperationQueue *restQueue;
 
 @end
 
@@ -36,59 +27,26 @@ static NSDictionary *statusMessages;
 //TODO: should move to a plist in app wrapper
 +(void)initialize {
     if (self == [PLRestful class]) {
-        statusMessages = [NSDictionary dictionaryWithObjectsAndKeys:
-                          @"Ok", [NSNumber numberWithInt:200], 
-                          @"Created", [NSNumber numberWithInt:201], // responds to a POST that creates a resource
-                          @"Accepted", [NSNumber numberWithInt:202], // long running task
-                          @"Non-authoritative information", [NSNumber numberWithInt:203], 
-                          @"No content", [NSNumber numberWithInt:204], 
-                          @"Reset content", [NSNumber numberWithInt:205], 
-                          @"Partial content", [NSNumber numberWithInt:206], 
-                          @"Multiple choices", [NSNumber numberWithInt:300], 
-                          @"Moved permanently", [NSNumber numberWithInt:301], // new URI in Location header
-                          @"Found", [NSNumber numberWithInt:302], // temp URI in Location header
-                          @"See other", [NSNumber numberWithInt:303], // see Location header
-                          @"Not modified", [NSNumber numberWithInt:304], 
-                          @"Use proxy", [NSNumber numberWithInt:305], 
-                          @"Bad request", [NSNumber numberWithInt:400], 
-                          @"Unauthorized", [NSNumber numberWithInt:401], // WWW-Authenticate header has challenge
-                          @"Forbidden", [NSNumber numberWithInt:403], 
-                          @"Not found", [NSNumber numberWithInt:404], 
-                          @"Not allowed", [NSNumber numberWithInt:405], // Allow header has list of valid methods
-                          @"Not acceptable", [NSNumber numberWithInt:406], 
-                          @"Authentication required", [NSNumber numberWithInt:407], 
-                          @"Request timeout", [NSNumber numberWithInt:408], 
-                          @"Conflict", [NSNumber numberWithInt:409], 
-                          @"Gone", [NSNumber numberWithInt:410], 
-                          @"Length required", [NSNumber numberWithInt:411], 
-                          @"Precondition failed", [NSNumber numberWithInt:412], 
-                          @"Request entity too large", [NSNumber numberWithInt:413], 
-                          @"Request URI too long", [NSNumber numberWithInt:414], 
-                          @"Unspported media type", [NSNumber numberWithInt:415], 
-                          @"Requested range not satisfiable", [NSNumber numberWithInt:416], 
-                          @"Expectation failed", [NSNumber numberWithInt:417], 
-                          @"Internal server error", [NSNumber numberWithInt:500], 
-                          @"Not implemented", [NSNumber numberWithInt:501], 
-                          @"Bad gateway", [NSNumber numberWithInt:502], 
-                          @"Service unavailable", [NSNumber numberWithInt:503], // temporary 
-                          @"Gateway timeout", [NSNumber numberWithInt:504], 
-                          nil];
+        NSString *path = [[NSBundle mainBundle] pathForResource:@"statusMessages.plist" ofType:nil];
+        statusMessages = [NSDictionary dictionaryWithContentsOfFile:path];
+        if (!statusMessages) statusMessages = [NSDictionary dictionary];
     }
 }
 
-+ (NSString *)messageForStatus:(int)status {
-    return [statusMessages objectForKey:[NSNumber numberWithInt:status]];
++ (NSString *)messageForStatus:(NSInteger)status {
+    NSString *statusString = [NSString stringWithFormat:@"%ld", (long)status];
+    return [statusMessages objectForKey:statusString];
 }
 
 + (BOOL)checkReachability:(NSURL *)url {
-    Reachability *hostReach = [Reachability reachabilityForInternetConnection];	
-	NetworkStatus netStatus = [hostReach currentReachabilityStatus];	
+    Reachability *hostReach = [Reachability reachabilityForInternetConnection];
+	NetworkStatus netStatus = [hostReach currentReachabilityStatus];
 	if (netStatus == NotReachable) {
         [PRPAlertView showWithTitle:@"Network" message:@"Not connected to the Internet" buttonTitle:@"Continue"];
         return NO;
     } else {
         hostReach = [Reachability reachabilityWithHostName:[url host]];
-        NetworkStatus netStatus = [hostReach currentReachabilityStatus];	
+        NetworkStatus netStatus = [hostReach currentReachabilityStatus];
         if (netStatus == NotReachable) {
             [PRPAlertView showWithTitle:@"Network" message:@"Can't reach server" buttonTitle:@"Continue"];
             return NO;
@@ -98,13 +56,23 @@ static NSDictionary *statusMessages;
 }
 
 + (void)get:(NSString *)requestPath parameters:(NSDictionary *)parameters completionBlock:(PLRestfulAPICompletionBlock)completion {
-    PLRestful *api = [[[self alloc] init] autorelease];
+    PLRestful *api = [[self alloc] init];
     [api get:requestPath parameters:parameters completionBlock:completion];
 }
 
 + (void)post:(NSString *)requestPath content:(NSDictionary *)content completionBlock:(PLRestfulAPICompletionBlock)completion {
-    PLRestful *api = [[[self alloc] init] autorelease];
+    PLRestful *api = [[self alloc] init];
     [api post:requestPath content:content completionBlock:completion];
+}
+
++ (void)put:(NSString *)requestPath content:(NSDictionary *)content completionBlock:(PLRestfulAPICompletionBlock)completion {
+    PLRestful *api = [[self alloc] init];
+    [api put:requestPath content:content completionBlock:completion];
+}
+
++ (void)delete:(NSString *)requestPath completionBlock:(PLRestfulAPICompletionBlock)completion {
+    PLRestful *api = [[self alloc] init];
+    [api delete:requestPath completionBlock:completion];
 }
 
 
@@ -119,73 +87,113 @@ static NSDictionary *statusMessages;
 }
 
 - (void)dealloc {
+    [self.restQueue cancelAllOperations];
     self.completionBlock = nil;
-    [super dealloc];
 }
 
-- (void)handleRequest:(ASIHTTPRequest *)aRequest completion:(PLRestfulAPICompletionBlock)completion {
+- (void)callCompletionBlockWithObject:(id)object status:(NSInteger)status error:(NSError *)error {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[UIApplication sharedApplication] prp_popNetworkActivity];
+        self.completionBlock(self, object, status, error);
+    });
+}
+
+- (void)handleRequest:(NSMutableURLRequest *)request completion:(PLRestfulAPICompletionBlock)completion {
+    
+    if (self.username && self.password && self.useBasicAuthentication) {
+        NSString *authString = [[NSString stringWithFormat:@"%@:%@", username, password] base64];
+        NSString *authHeader = [NSString stringWithFormat:@"Basic %@", authString];
+        [request setValue:authHeader forHTTPHeaderField:@"Authorization"];
+    }
+    //[request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+	[request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
+    
     self.completionBlock = completion;
     [[UIApplication sharedApplication] prp_pushNetworkActivity];
     
-    if (![PLRestful checkReachability:aRequest.url]) {
+    if (![PLRestful checkReachability:request.URL]) {
         [[UIApplication sharedApplication] prp_popNetworkActivity];
         return;
     }
     
-    __block ASIHTTPRequest *request = aRequest;
-    if (username && password) {
-        request.username = username;
-        request.password = password;
-        request.authenticationScheme = (NSString *)kCFHTTPAuthenticationSchemeBasic;
-    }
-    [request setCompletionBlock:^{
-        [[UIApplication sharedApplication] prp_popNetworkActivity];
-        NSString *json = [request responseString];
-        //NSLog(@"json = %@", json);
-        id object = [json JSONValue];
-        if (object) {
-            self.completionBlock(self, object, request.responseStatusCode, nil);
+    self.restQueue = [[NSOperationQueue alloc] init];
+    self.restQueue.name = @"SOE REST Queue";
+    [NSURLConnection sendAsynchronousRequest:request queue:self.restQueue completionHandler:^(NSURLResponse *response, NSData *data, NSError *error){
+        NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
+        if (error) {
+            NSLog(@"%s %@", __PRETTY_FUNCTION__, error);
+            [self callCompletionBlockWithObject:nil status:httpResponse.statusCode error:error];
         } else {
-            NSLog(@"received invalid json: '%@'", json);
-            
-            self.completionBlock(self, object, request.responseStatusCode, nil);
-        }
-    }];
-    [request setFailedBlock:^{
-        [[UIApplication sharedApplication] prp_popNetworkActivity];
-        NSError *error = [request error];
-        self.completionBlock(self, nil, request.responseStatusCode, error);
-    }];
-    [request startAsynchronous];
-}
-
-- (void)get:(NSString *)requestString parameters:(NSDictionary *)parameters completionBlock:(PLRestfulAPICompletionBlock)completion {
-    NSString *fullRequestString = [self.endpoint stringByAppendingString:requestString];
-    if (parameters) {
-        fullRequestString = [fullRequestString stringByAppendingString:@"?"];
-        BOOL first = YES;
-        for (NSString *key in [parameters allKeys]) {
-            if (!first) {
-                fullRequestString = [fullRequestString stringByAppendingString:@"&"];
+            if ([data length] == 0) {
+                NSLog(@"no data");
+                [self callCompletionBlockWithObject:nil status:httpResponse.statusCode error:[NSError errorWithDomain:@"com.plsys.SOEStatus" code:1001 userInfo:nil]];
+            } else {
+                NSError *error;
+                id object = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingAllowFragments error:&error];
+                if (object) {
+                    [self callCompletionBlockWithObject:object status:httpResponse.statusCode error:nil];
+                } else {
+                    NSLog(@"received bad json: (%lu) '%@'", (unsigned long)[data length], [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]);
+                    [self callCompletionBlockWithObject:nil status:httpResponse.statusCode error:[NSError errorWithDomain:@"com.plsys.SOEStatus" code:1002 userInfo:nil]];
+                    
+                }
             }
-            fullRequestString = [fullRequestString stringByAppendingString:[NSString stringWithFormat:@"%@=%@", key, [[[parameters objectForKey:key] description] pl_stringByAddingPercentEscapesUsingEncoding:kCFStringEncodingUTF8]]];
-            first = NO;
         }
-    }
-    NSURL *requestURL = [NSURL URLWithString:fullRequestString];
-    //NSLog(@"get: '%@'", [requestURL absoluteString]);
+    }];
+}
+
+// read
+- (void)get:(NSString *)requestString parameters:(NSDictionary *)parameters completionBlock:(PLRestfulAPICompletionBlock)completion {
+    NSURL *requestURL = [[NSURL URLWithString:endpoint] urlByAddingPath:requestString parameters:parameters];
+    NSLog(@"get: '%@'", [requestURL absoluteString]);
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:requestURL];
+    [request setHTTPMethod:@"GET"];
     
-    ASIHTTPRequest *request = [ASIHTTPRequest requestWithURL:requestURL];
+    [self handleRequest:request completion:(PLRestfulAPICompletionBlock)completion];
+}
+
+// update
+- (void)post:(NSString *)requestString content:(NSDictionary *)content completionBlock:(PLRestfulAPICompletionBlock)completion {
+    NSURL *requestURL = [[NSURL URLWithString:endpoint] urlByAddingPath:requestString parameters:nil];
+    NSLog(@"post: '%@'", [requestURL absoluteString]);
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:requestURL];
+    [request setHTTPMethod:@"POST"];
+    
+    NSError *error = nil;
+    request.HTTPBody = [NSJSONSerialization dataWithJSONObject:content options:0 error:&error];
+    if (error) {
+        NSLog(@"json generation failed: %@", error);
+        [self callCompletionBlockWithObject:nil status:0 error:[NSError errorWithDomain:@"com.plsys.SOEStatus" code:1003 userInfo:nil]];
+        return;
+    }
     [self handleRequest:request completion:completion];
 }
 
-- (void)post:(NSString *)requestString content:(NSDictionary *)content completionBlock:(PLRestfulAPICompletionBlock)completion {
-    NSString *fullRequestString = [self.endpoint stringByAppendingString:requestString];
-    NSURL *requestURL = [NSURL URLWithString:fullRequestString];
+// create
+- (void)put:(NSString *)requestPath content:(NSDictionary *)content completionBlock:(PLRestfulAPICompletionBlock)completion {
+    NSURL *requestURL = [[NSURL URLWithString:endpoint] urlByAddingPath:requestPath parameters:nil];
+    NSLog(@"put: '%@'", [requestURL absoluteString]);
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:requestURL];
+    [request setHTTPMethod:@"PUT"];
     
-    ASIHTTPRequest *request = [ASIHTTPRequest requestWithURL:requestURL];
-    [request appendPostData:[[content JSONRepresentation] dataUsingEncoding:NSUTF8StringEncoding]];
+    NSError *error = nil;
+    request.HTTPBody = [NSJSONSerialization dataWithJSONObject:content options:0 error:&error];
+    if (error) {
+        NSLog(@"json generation failed: %@", error);
+        [self callCompletionBlockWithObject:nil status:0 error:[NSError errorWithDomain:@"com.plsys.SOEStatus" code:1003 userInfo:nil]];
+        return;
+    }
     [self handleRequest:request completion:completion];
+}
+
+// delete
+- (void)delete:(NSString *)requestPath completionBlock:(PLRestfulAPICompletionBlock)completion {
+    NSURL *requestURL = [[NSURL URLWithString:endpoint] urlByAddingPath:requestPath parameters:nil];
+    NSLog(@"delete: '%@'", [requestURL absoluteString]);
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:requestURL];
+    [request setHTTPMethod:@"DELETE"];
+    
+    [self handleRequest:request completion:(PLRestfulAPICompletionBlock)completion];
 }
 
 @end

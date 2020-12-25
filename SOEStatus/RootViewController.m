@@ -9,52 +9,46 @@
 #import "RootViewController.h"
 #import "SOEStatusAPI.h"
 #import "PRPAlertView.h"
-#import "MoveArray.h"
 #import "ServerViewController.h"
 #import "PLActionSheet.h"
-#import <Twitter/Twitter.h>
+#import "SOEGame.h"
+#import "PLFeedback.h"
+#import "WatchServer.h"
+#import "BackgroundViewController.h"
+
+@interface RootViewController () <UINavigationControllerDelegate>
+
+@property (nonatomic, strong) PLFeedback *plFeedback;
+
+@end
+
+NSString *SOEGameSelectedNotification = @"SOEGameSelectedNotification";
 
 @implementation RootViewController
 
-@synthesize statuses, rows;
+@synthesize statuses;
 
-- (NSDictionary *)rowForKey:(NSString *)key {
-    for (NSDictionary *game in self.rows) {
-        if ([key isEqualToString:[game valueForKey:@"key"]]) {
-            return game;
-        }
-    }
-    return nil;
-}
-
-- (void)refresh {
-    [super refresh];
-    
-    [SOEStatusAPI getStatuses:^(PLRestful *api, id object, int status, NSError *error){
+- (void)refresh {    
+    [SOEStatusAPI getStatuses:^(PLRestful *api, id object, NSInteger status, NSError *error){
         if (error) {
+            NSLog(@"API Error: %@", error);
             NSString *message = [NSString stringWithFormat:@"%@", [error localizedDescription]];
-            [PRPAlertView showWithTitle:@"API Error" message:message buttonTitle:@"Continue"];
-        } else {
-            self.statuses = object;
-            // remove dropped games
-            NSMutableArray *newRows = [NSMutableArray array];
-            for (NSDictionary *game in self.rows) {
-                if ([self.statuses objectForKey:[game valueForKey:@"key"]])
-                    [newRows addObject:game];
-            }
-            self.rows = newRows;
-            // add missing games
-            for (NSString *key in [self.statuses allKeys]) {
-                NSDictionary *row = [self rowForKey:key];
-                if (!row) [self.rows addObject:[NSDictionary dictionaryWithObject:key forKey:@"key"]];
-            }
-            
-            NSString *documentsPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) lastObject];
-            NSString *filePath = [documentsPath stringByAppendingPathComponent:@"rows.plist"];
-            [self.rows writeToFile:filePath atomically:YES];
-
-            [self.tableView reloadData];
+            [self.refreshControl endRefreshing];
+            [PRPAlertView showWithTitle:@"API Error" message:[NSString stringWithFormat:@"The Daybreak Status server isn't responding (%@).", message] buttonTitle:@"Continue"];
         }
+        
+        CGFloat height = 44.0 * [[SOEGame games] count];
+        CGFloat maxHeight = self.tableView.superview.frame.size.height - self.tableView.frame.origin.y;
+        maxHeight = [UIScreen mainScreen].bounds.size.height - self.navigationController.navigationBar.bounds.size.height - 100.0f;
+        if (height > maxHeight) height = maxHeight;
+        CGFloat width = self.preferredContentSize.width;
+        if (width == 0) width = 320.0;
+        
+        self.preferredContentSize = CGSizeMake(width, height);
+        [self.tableView reloadData];
+        [self.refreshControl endRefreshing];
+        
+        if (!error) [[WatchServer sharedInstance] notify];
     }];
 }
 
@@ -63,174 +57,69 @@
     if (self.tableView.isEditing) {
         UIBarButtonItem *doneButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(editing)];
         self.navigationItem.rightBarButtonItem = doneButton;
-        [doneButton release];
     } else {
         UIBarButtonItem *editButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemEdit target:self action:@selector(editing)];
         self.navigationItem.rightBarButtonItem = editButton;
-        [editButton release];
-        NSString *documentsPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) lastObject];
-        NSString *filePath = [documentsPath stringByAppendingPathComponent:@"rows.plist"];
-        [self.rows writeToFile:filePath atomically:YES];
+        [SOEGame save];
     }
 }
 
 - (IBAction)actions {
     UIBarButtonItem *item = self.navigationItem.leftBarButtonItem;
+    self.plFeedback.viewToPresentSheet = item;
     NSArray *buttons = [NSArray arrayWithObjects:@"Open in Safari", @"Do you like this app?", @"Feedback", nil];
-    [PLActionSheet actionSheetWithTitle:nil destructiveButtonTitle:nil buttons:buttons showFrom:item onDismiss:^(int buttonIndex){
-        if (buttonIndex == 0) {
+    [PLActionSheet actionSheetWithTitle:nil destructiveButtonTitle:nil buttons:buttons showFrom:item onDismiss:^(NSInteger buttonIndex){
+        if (buttonIndex == [buttons indexOfObject:@"Open in Safari"]) {
             [self openInSafari];
-        } else if (buttonIndex == 1) {
-            [self like];
-        } else if (buttonIndex == 2) {
-            [self feedback];
+        } else if (buttonIndex == [buttons indexOfObject:@"Do you like this app?"]) {
+            [self.plFeedback like];
+        } else if (buttonIndex == [buttons indexOfObject:@"Feedback"]) {
+            [self.plFeedback feedback];
         }
-    } onCancel:nil];
+    } onCancel:nil finally:nil];
 }
 
 - (IBAction)openInSafari {
-    [PRPAlertView showWithTitle:@"Warning" message:@"This will open Mobile Safari with the SOE status page" cancelTitle:@"Cancel" cancelBlock:nil otherTitle:@"Continue" otherBlock:^(NSString *title){
-        [[UIApplication sharedApplication] openURL:[NSURL URLWithString:@"http://www.soe.com/status"]];
+    [PRPAlertView showWithTitle:@"Warning" message:@"This will open Safari with the Daybreak status page" cancelTitle:@"Cancel" cancelBlock:nil otherTitle:@"Continue" otherBlock:^(NSString *title){
+        [[UIApplication sharedApplication] openURL:[NSURL URLWithString:@"http://www.daybreakgames.com/status/"]];
     }];
 }
 
-- (IBAction)like {
-    UIBarButtonItem *item = self.navigationItem.leftBarButtonItem;
-    NSArray *buttons = [NSArray arrayWithObjects:@"Review in App Store", @"Share by Twitter", @"Share by Email", nil];
-    [PLActionSheet actionSheetWithTitle:nil destructiveButtonTitle:nil buttons:buttons showFrom:item onDismiss:^(int buttonIndex){
-        if (buttonIndex == 0) {
-            [self review];
-        } else if (buttonIndex == 1) {
-            [self shareByTwitter];
-        } else if (buttonIndex == 2) {
-            [self shareByEmail];
-        }
-    } onCancel:nil];
-}
+#pragma mark UIViewController
 
-- (IBAction)review {
-    [[UIApplication sharedApplication] 
-     openURL:[NSURL URLWithString:@"itms-apps://ax.itunes.apple.com/WebObjects/MZStore.woa/wa/viewContentsUserReviews?type=Purple+Software&id=463597867"]];
-    NSUserDefaults *prefs = [NSUserDefaults standardUserDefaults];
-    [prefs setInteger:21 forKey:@"launchCount"];
-}
-
-- (IBAction)shareByTwitter {
-    if ([TWTweetComposeViewController canSendTweet]) {
-        TWTweetComposeViewController *tweetSheet = [[TWTweetComposeViewController alloc] init];
-        [tweetSheet setInitialText:@"I like this application and I think you should try it too."];
-        [tweetSheet addURL:[NSURL URLWithString:@"http://itunes.com/app/soestatus"]];
-        [self presentModalViewController:tweetSheet animated:YES];
-    }
-}
-
-- (IBAction)shareByEmail {
-    if (![MFMailComposeViewController canSendMail]) {
-        [PRPAlertView showWithTitle:@"Mail error" message:@"This device is not configured to send email" buttonTitle:@"Continue"];
-        return;
-    }
-    
-    MFMailComposeViewController *mailer = [[MFMailComposeViewController alloc] init];
-    mailer.modalPresentationStyle = UIModalPresentationFormSheet;
-    mailer.mailComposeDelegate = self;
-    
-    NSString *bundleId = [[[NSBundle mainBundle] infoDictionary] objectForKey:(id)kCFBundleIdentifierKey];
-    NSString *appName = [bundleId pathExtension];
-    appName = [appName capitalizedString];
-        
-    [mailer setSubject:appName];
-    
-    [mailer setMessageBody:@"I like this application and I think you should try it too. http://itunes.com/app/soestatus" isHTML:NO];
-    
-    // Present the mail composition interface.
-    [self presentModalViewController:mailer animated:YES];
-    [mailer release];
-
-}
-
-- (IBAction)feedback {
-    if (![MFMailComposeViewController canSendMail]) {
-        [PRPAlertView showWithTitle:@"Mail error" message:@"This device is not configured to send email" buttonTitle:@"Continue"];
-        return;
-    }
-    
-    MFMailComposeViewController *mailer = [[MFMailComposeViewController alloc] init];
-    mailer.modalPresentationStyle = UIModalPresentationFormSheet;
-    mailer.mailComposeDelegate = self;
-    
-    NSString *bundleId = [[[NSBundle mainBundle] infoDictionary] objectForKey:(id)kCFBundleIdentifierKey];
-    NSString *appName = [bundleId pathExtension];
-    appName = [appName capitalizedString];
-
-    NSString *version = [[[NSBundle mainBundle] infoDictionary] objectForKey:(id)kCFBundleVersionKey];
-    
-    [mailer setSubject:[@"Feedback About " stringByAppendingString:appName]];
-    [mailer setToRecipients:[NSArray arrayWithObject:@"support@plsys.co.uk"]];
-    
-    NSString *body = [NSString stringWithFormat:@"AppID: %@\nVersion: %@\nLocale: %@\nDevice: %@\nOS: %@", bundleId, version, ((NSLocale *)[NSLocale currentLocale]).localeIdentifier, [UIDevice currentDevice].model, [UIDevice currentDevice].systemVersion];
-    [mailer setMessageBody:body isHTML:NO];
-    
-    // Present the mail composition interface.
-    [self presentModalViewController:mailer animated:YES];
-    [mailer release];
-}
-
-- (void)viewDidLoad
-{
+- (void)viewDidLoad {
     [super viewDidLoad];
     
     self.title = @"Games";
     
     UIBarButtonItem *editButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemEdit target:self action:@selector(editing)];
     self.navigationItem.rightBarButtonItem = editButton;
-    [editButton release];
     
     UIBarButtonItem *actionsButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAction target:self action:@selector(actions)];
     self.navigationItem.leftBarButtonItem = actionsButton;
-    [actionsButton release];
     
-    NSString *documentsPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) lastObject];
-    NSString *filePath = [documentsPath stringByAppendingPathComponent:@"rows.plist"];
-    self.rows = [NSMutableArray arrayWithContentsOfFile:filePath];
-    if (!rows) self.rows = [NSMutableArray array];
-    for (NSDictionary *game in [SOEStatusAPI games]) {
-        NSString *key = [game valueForKey:@"key"];
-        NSDictionary *row = [self rowForKey:key];
-        if (row) {
-            // game added to feed, but name comes from game.plist, which was updated later (by me)
-            if (![row valueForKey:@"name"]) {
-                [rows replaceObjectAtIndex:[rows indexOfObject:row] withObject:game];
-            }
-        } else {
-            [rows addObject:game];
-        }
-    }
+    self.refreshControl = [[UIRefreshControl alloc] init];
+    [self.refreshControl addTarget:self action:@selector(refresh) forControlEvents:UIControlEventValueChanged];
     
     // rater
-    NSUserDefaults *prefs = [NSUserDefaults standardUserDefaults];
-    NSInteger launchCount = [prefs integerForKey:@"launchCount"];
-    if (launchCount == 20) {
-        launchCount++;
-        [prefs setInteger:launchCount forKey:@"launchCount"];
-        PRPAlertView *alert = [[PRPAlertView alloc] initWithTitle:@"Do you like this app?" message:@"Please rate it on the App Store!" cancelTitle:@"Never" cancelBlock:^(NSString *title){
-            [prefs setInteger:21 forKey:@"launchCount"];
-        } otherTitle:@"Rate now" otherBlock:^(NSString *title){
-            if ([title isEqualToString:@"Rate now"]) {
-                [self review];
-            } else if ([title isEqualToString:@"Later"]) {
-                [prefs setInteger:0 forKey:@"launchCount"];
-            }
-        }];
-        [alert addButtonWithTitle:@"Later"];
-        [alert show];
-    }
+    self.plFeedback = [[PLFeedback alloc] initWithViewController:self];
+    [self.plFeedback checkForRating];
     
-    [self refresh];
+    CGFloat width = self.preferredContentSize.width;
+    if (width == 0) width = 320.0;
+    self.preferredContentSize = CGSizeMake(width, 44.0 * [[SOEGame games] count]);
+    
+    if (self.navigationController.splitViewController) {
+        self.navigationItem.leftItemsSupplementBackButton = YES;
+        self.navigationItem.leftBarButtonItems = @[self.navigationController.splitViewController.displayModeButtonItem];
+        self.navigationController.delegate = self;
+    }
 }
 
 - (void)viewWillAppear:(BOOL)animated
 {
     [super viewWillAppear:animated];
+    [self refresh];
 }
 
 - (void)viewDidAppear:(BOOL)animated
@@ -248,14 +137,18 @@
 	[super viewDidDisappear:animated];
 }
 
- // Override to allow orientations other than the default portrait orientation.
-- (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation {
-	// Return YES for supported orientations.
-    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
-        return YES;
-    }
-	return (interfaceOrientation == UIInterfaceOrientationPortrait);
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIInterfaceOrientationMaskAll;
 }
+
+- (void)didReceiveMemoryWarning {
+    // Releases the view if it doesn't have a superview.
+    [super didReceiveMemoryWarning];
+    
+    // Relinquish ownership any cached data, images, etc that aren't in use.
+}
+
+#pragma mark UITableViewDataSource/UITaleViewDelegate
 
 // Customize the number of sections in the table view.
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
@@ -265,7 +158,7 @@
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
 {
-    return [self.rows count];
+    return [[SOEGame games] count];
 }
 
 // Customize the appearance of table view cells.
@@ -275,15 +168,12 @@
     
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:CellIdentifier];
     if (cell == nil) {
-        cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:CellIdentifier] autorelease];
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:CellIdentifier];
     }
 
     // Configure the cell.
-    NSDictionary *game = [self.rows objectAtIndex:indexPath.row];
-    NSString *key = [game valueForKey:@"key"];
-    NSString *value = [game valueForKey:@"name"];
-    if (!value) value = key;
-    cell.textLabel.text = value;
+    SOEGame *game = [[SOEGame games] objectAtIndex:indexPath.row];
+    cell.textLabel.text = game.name ? game.name : game.key;
     cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     
     return cell;
@@ -302,7 +192,7 @@
     if (editingStyle == UITableViewCellEditingStyleDelete)
     {
         // Delete the row from the data source.
-        [self.rows removeObjectAtIndex:indexPath.row];
+        [SOEGame removeGame:[[SOEGame games] objectAtIndex:indexPath.row ]];
         [tableView deleteRowsAtIndexPaths:[NSArray arrayWithObject:indexPath] withRowAnimation:UITableViewRowAnimationFade];
     }
     else if (editingStyle == UITableViewCellEditingStyleInsert)
@@ -314,7 +204,7 @@
 // Override to support rearranging the table view.
 - (void)tableView:(UITableView *)tableView moveRowAtIndexPath:(NSIndexPath *)fromIndexPath toIndexPath:(NSIndexPath *)toIndexPath
 {
-    [self.rows moveObjectFromIndex:fromIndexPath.row toIndex:toIndexPath.row];
+    [SOEGame moveGameFromIndex:fromIndexPath.row to:toIndexPath.row];
 }
 
 // Override to support conditional rearranging of the table view.
@@ -329,45 +219,41 @@
     ServerViewController *detailViewController = [[ServerViewController alloc] initWithNibName:@"ServerViewController" bundle:nil];
     // ...
     // Pass the selected object to the new view controller.
-    detailViewController.gameId = [[self.rows objectAtIndex:indexPath.row] valueForKey:@"key"];
-    detailViewController.title = [[self.rows objectAtIndex:indexPath.row] valueForKey:@"name"];
+    SOEGame *game = [[SOEGame games] objectAtIndex:indexPath.row];
+    detailViewController.gameId = game.key;
+    detailViewController.title = game.name;
     [self.navigationController pushViewController:detailViewController animated:YES];
-    [detailViewController release];
+    [[NSNotificationCenter defaultCenter] postNotificationName:SOEGameSelectedNotification object:self userInfo:@{@"game": game}];
 }
 
 - (void)tableView:(UITableView *)tableView accessoryButtonTappedForRowWithIndexPath:(NSIndexPath *)indexPath {
     [self tableView:tableView didDeselectRowAtIndexPath:indexPath];
 }
 
-- (void)didReceiveMemoryWarning
-{
-    // Releases the view if it doesn't have a superview.
-    [super didReceiveMemoryWarning];
-    
-    // Relinquish ownership any cached data, images, etc that aren't in use.
+#pragma mark UINavigationControllerDelegate
+
+- (void)navigationController:(UINavigationController *)navigationController willShowViewController:(UIViewController *)viewController animated:(BOOL)animated {
+    if (viewController == self) {
+        // therefore has popped back to games menu
+        BackgroundViewController *backgroundViewController = [[BackgroundViewController alloc] initWithNibName:@"BackgroundViewController" bundle:nil];
+        UISplitViewController *splitViewController = self.navigationController.splitViewController;
+        NSInteger gameIndex = self.tableView.indexPathForSelectedRow.row;
+        if (gameIndex > 0) {
+            SOEGame *game = [[SOEGame games] objectAtIndex:gameIndex];
+            [[NSNotificationCenter defaultCenter] postNotificationName:SOEGameSelectedNotification object:self userInfo:@{@"game": game}];
+        }
+        if (splitViewController.viewControllers.count >= 2 && ![splitViewController.viewControllers[1] isKindOfClass:[backgroundViewController class]]) {
+            [splitViewController showDetailViewController:backgroundViewController sender:self];
+        }
+    }
 }
 
-- (void)viewDidUnload
-{
-    [super viewDidUnload];
-
-    // Relinquish ownership of anything that can be recreated in viewDidLoad or on demand.
-    // For example: self.myOutlet = nil;
-}
-
-- (void)dealloc
-{
-    self.statuses = nil;
-    [super dealloc];
-}
-
-#pragma mark MFMailComposeViewControllerDelegate
-
-- (void)mailComposeController:(MFMailComposeViewController *)controller
-          didFinishWithResult:(MFMailComposeResult)result
-                        error:(NSError *)error {
-    if (error) NSLog(@"%s error sending email, result %d: %@", __PRETTY_FUNCTION__, result, [error localizedDescription]);
-    [self dismissModalViewControllerAnimated:YES];
+- (void)navigationController:(UINavigationController *)navigationController didShowViewController:(UIViewController *)viewController animated:(BOOL)animated {
+    NSLog(@"%s", __PRETTY_FUNCTION__);
+    if ([viewController isKindOfClass:[BackgroundViewController class]]) {
+        // this is some weird behaviour from UISplitViewController, so kill it
+        [navigationController setViewControllers:@[navigationController.viewControllers[0]] animated:NO];
+    }
 }
 
 @end

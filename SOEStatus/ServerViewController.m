@@ -10,10 +10,13 @@
 #import "SOEStatusAPI.h"
 #import "PRPAlertView.h"
 #import "ServerCell.h"
+#import "ChartController.h"
+#import "SOEGame.h"
+#import "SOEServer.h"
+#import "WatchServer.h"
+#import "SOEStatusAppDelegate.h"
 
 @implementation ServerViewController
-
-@synthesize gameId, game, servers, serverCellNib, dateFormatter;
 
 - (id)initWithNibName:(NSString *)nibNameOrNil bundle:(NSBundle *)nibBundleOrNil
 {
@@ -24,14 +27,6 @@
     return self;
 }
 
-- (void)dealloc {
-    self.gameId = nil;
-    self.game = nil;
-    self.servers = nil;
-    self.serverCellNib =nil;
-    self.dateFormatter = nil;
-    [super dealloc];
-}
 
 - (void)didReceiveMemoryWarning
 {
@@ -42,35 +37,38 @@
 }
 
 - (UINib *)serverCellNib {
-    if (!serverCellNib) {
+    if (!_serverCellNib) {
         self.serverCellNib = [ServerCell nib];
     }
-    return serverCellNib;
-}
-
-- (NSDateFormatter *)dateFormatter {
-    if (!dateFormatter) {
-        dateFormatter = [[NSDateFormatter alloc] init];
-        [dateFormatter setDateStyle:NSDateFormatterNoStyle];
-        [dateFormatter setTimeStyle:NSDateFormatterMediumStyle];
-    }
-    return dateFormatter;
+    return _serverCellNib;
 }
 
 - (void)refresh {
     [self loadGame];
-    [super refresh];
 }
 
 - (void)loadGame {
-    [SOEStatusAPI getGameStatus:gameId completion:^(PLRestful *api, id object, int status, NSError *error) {
+    [SOEStatusAPI getGameStatus:self.gameId completion:^(PLRestful *api, id object, NSInteger status, NSError *error) {
         if (error) {
             [PRPAlertView showWithTitle:@"Error" message:[error localizedDescription] buttonTitle:@"Continue"];
-            return;
+            [self.refreshControl endRefreshing];
+        } else {
+            self.game = [SOEGame gameForKey:self.gameId];
+            self.servers = self.game.servers;
+            
+            CGFloat width = self.preferredContentSize.width;
+            if (width == 0) width = 320.0;
+            CGFloat height = 44.0 * [self.servers count];
+            CGFloat maxHeight = self.tableView.superview.frame.size.height - self.tableView.frame.origin.y;
+            maxHeight = [UIScreen mainScreen].bounds.size.height - self.navigationController.navigationBar.bounds.size.height - 100.0f;
+            if (height > maxHeight) height = maxHeight;
+
+            self.preferredContentSize = CGSizeMake(width, height);
+            [self.tableView reloadData];
+            [self.refreshControl endRefreshing];
+            
+            [[WatchServer sharedInstance] notify];
         }
-        self.game = [object valueForKey:@"game"];
-        self.servers = [object valueForKey:@"regionServers"];        
-        [self.tableView reloadData];
     }];
 }
 
@@ -80,13 +78,8 @@
 {
     [super viewDidLoad];
     // Do any additional setup after loading the view from its nib.
-}
-
-- (void)viewDidUnload
-{
-    [super viewDidUnload];
-    // Release any retained subviews of the main view.
-    // e.g. self.myOutlet = nil;
+    self.refreshControl = [[UIRefreshControl alloc] init];
+    [self.refreshControl addTarget:self action:@selector(refresh) forControlEvents:UIControlEventValueChanged];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -95,10 +88,8 @@
     [self loadGame];
 }
 
-- (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation
-{
-    // Return YES for supported orientations
-    return (interfaceOrientation == UIInterfaceOrientationPortrait);
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIInterfaceOrientationMaskAll;
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
@@ -117,26 +108,31 @@
     ServerCell *cell = [ServerCell cellForTableView:tableView fromNib:self.serverCellNib];
     
     // Configure the cell.
-    NSDictionary *server = [self.servers objectAtIndex:indexPath.row];
-    NSString *status = [server valueForKey:@"status"];
-    
-    cell.serverName.text = [server valueForKey:@"name"];
-    cell.region.text = [server valueForKey:@"region"];
-    cell.age.text = [self.dateFormatter stringFromDate:[server valueForKey:@"date"]];
-    cell.status.text = status;
-    
-    if ([status isEqualToString:@"low"]) {
-        cell.imageView.image = [UIImage imageNamed:@"low_icon"];
-    } else if ([status isEqualToString:@"medium"]) {
-        cell.imageView.image = [UIImage imageNamed:@"medium_icon"];
-    } else if ([status isEqualToString:@"high"]) {
-        cell.imageView.image = [UIImage imageNamed:@"high_icon"];
-    } else if ([status isEqualToString:@"locked"]) {
-        cell.imageView.image = [UIImage imageNamed:@"lock_icon"];
-    } else if ([status isEqualToString:@"down"]) {
-        cell.imageView.image = [UIImage imageNamed:@"down_icon"];
-    }
+    SOEServer *server = [self.servers objectAtIndex:indexPath.row];
+    cell.server = server;
+    cell.vcForAlerts = self;
+
     return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
+{
+    ChartController *chartController = [[ChartController alloc] initWithNibName:@"ChartController" bundle:nil];
+    SOEServer *server = [self.servers objectAtIndex:indexPath.row];
+    chartController.gameCode = server.game;
+    chartController.server = server.name;
+    
+    SOEStatusAppDelegate *appDelegate = (SOEStatusAppDelegate *)[UIApplication sharedApplication].delegate;
+    
+    if (appDelegate.splitViewController) {
+        [appDelegate.splitViewController showDetailViewController:chartController sender:self];
+    } else {
+        [self.navigationController pushViewController:chartController animated:YES];
+    }
+}
+
+- (void)tableView:(UITableView *)tableView accessoryButtonTappedForRowWithIndexPath:(NSIndexPath *)indexPath {
+    //SOEServer *server = [self.servers objectAtIndex:indexPath.row];
 }
 
 @end

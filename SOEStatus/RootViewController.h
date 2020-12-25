@@ -7,22 +7,14 @@
 //
 
 #import <UIKit/UIKit.h>
-#import <MessageUI/MessageUI.h>
-#import "PullRefreshTableViewController.h"
 
-@interface RootViewController : PullRefreshTableViewController <UIActionSheetDelegate, MFMailComposeViewControllerDelegate>
+extern NSString *SOEGameSelectedNotification;
 
-@property (nonatomic, retain) NSDictionary *statuses;
-@property (nonatomic, retain) NSMutableArray *rows;
+@interface RootViewController : UITableViewController
+
+@property (nonatomic, strong) NSDictionary *statuses;
 
 - (IBAction)actions;
 - (IBAction)openInSafari;
-- (IBAction)like;
-- (IBAction)review;
-- (IBAction)shareByTwitter;
-- (IBAction)shareByEmail;
-- (IBAction)feedback;
-
-- (NSDictionary *)rowForKey:(NSString *)key;
 
 @end

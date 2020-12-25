@@ -7,15 +7,15 @@
 //
 
 #import <UIKit/UIKit.h>
-#import "PullRefreshTableViewController.h"
 
-@interface ServerViewController : PullRefreshTableViewController
+@class SOEGame;
+
+@interface ServerViewController : UITableViewController
 
 @property (nonatomic, copy) NSString *gameId;
-@property (nonatomic, retain) NSDictionary *game;
-@property (nonatomic, retain) NSArray *servers;
-@property (nonatomic, retain) UINib *serverCellNib;
-@property (nonatomic, retain) NSDateFormatter *dateFormatter;
+@property (nonatomic, strong) SOEGame *game;
+@property (nonatomic, strong) NSArray *servers;
+@property (nonatomic, strong) UINib *serverCellNib;
 
 - (void)loadGame;
 

@@ -10,7 +10,7 @@
 
 @class PLRestful;
 
-typedef void (^PLRestfulAPICompletionBlock)(PLRestful *api, id object, int status, NSError *error);
+typedef void (^PLRestfulAPICompletionBlock)(PLRestful *api, id object, NSInteger status, NSError *error);
 
 @interface PLRestful : NSObject
 
@@ -18,13 +18,18 @@ typedef void (^PLRestfulAPICompletionBlock)(PLRestful *api, id object, int statu
 @property (nonatomic, copy) PLRestfulAPICompletionBlock completionBlock;
 @property (nonatomic, copy) NSString *username;
 @property (nonatomic, copy) NSString *password;
+@property (nonatomic, assign) BOOL useBasicAuthentication;
 
-+ (NSString *)messageForStatus:(int)status;
++ (NSString *)messageForStatus:(NSInteger)status;
 + (BOOL)checkReachability:(NSURL *)url;
 + (void)get:(NSString *)requestPath parameters:(NSDictionary *)parameters completionBlock:(PLRestfulAPICompletionBlock)completion;
 + (void)post:(NSString *)requestPath content:(NSDictionary *)content completionBlock:(PLRestfulAPICompletionBlock)completion;
++ (void)put:(NSString *)requestPath content:(NSDictionary *)content completionBlock:(PLRestfulAPICompletionBlock)completion;
++ (void)delete:(NSString *)requestPath completionBlock:(PLRestfulAPICompletionBlock)completion;
 
 - (void)get:(NSString *)requestPath parameters:(NSDictionary *)parameters completionBlock:(PLRestfulAPICompletionBlock)completion;
 - (void)post:(NSString *)requestPath content:(NSDictionary *)content completionBlock:(PLRestfulAPICompletionBlock)completion;
+- (void)put:(NSString *)requestPath content:(NSDictionary *)content completionBlock:(PLRestfulAPICompletionBlock)completion;
+- (void)delete:(NSString *)requestPath completionBlock:(PLRestfulAPICompletionBlock)completion;
 
 @end
